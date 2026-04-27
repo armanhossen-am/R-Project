@@ -1,0 +1,118 @@
+library(tidyverse)
+library(readr)
+library(scales)
+
+# Read the raw electricity data
+raw_energy <- read_csv("Data.csv", show_col_types = FALSE)
+
+# Clean the main variables and keep only annual electricity net generation rows
+energy_clean <- raw_energy %>%
+  mutate(
+    year = floor(YYYYMM / 100),
+    month_code = YYYYMM %% 100,
+    generation_mkwh = parse_number(Value),
+    Description = str_squish(Description)
+  ) %>%
+  filter(
+    str_detect(Description, "Electricity Net Generation"),
+    !str_detect(Description, "Month"),
+    month_code == 13,
+    !is.na(generation_mkwh)
+  ) %>%
+  mutate(
+    # Identify the sector from the description text
+    sector = case_when(
+      str_detect(Description, "All Sectors") ~ "All Sectors",
+      str_detect(Description, "Electric Power Sector") ~ "Electric Power Sector",
+      str_detect(Description, "Commercial Sector") ~ "Commercial Sector",
+      str_detect(Description, "Industrial Sector") ~ "Industrial Sector",
+      TRUE ~ "Other Sector"
+    ),
+    
+    # Identify fuel type from the description text
+    fuel = case_when(
+      str_detect(Description, regex("Coal", ignore_case = TRUE)) ~ "Coal",
+      str_detect(Description, regex("Natural Gas", ignore_case = TRUE)) ~ "Natural Gas",
+      str_detect(Description, regex("Nuclear", ignore_case = TRUE)) ~ "Nuclear",
+      str_detect(Description, regex("Conventional Hydroelectric", ignore_case = TRUE)) ~ "Hydroelectric",
+      str_detect(Description, regex("Wind", ignore_case = TRUE)) ~ "Wind",
+      str_detect(Description, regex("Solar", ignore_case = TRUE)) ~ "Solar",
+      str_detect(Description, regex("Petroleum", ignore_case = TRUE)) ~ "Petroleum",
+      str_detect(Description, regex("Geothermal", ignore_case = TRUE)) ~ "Geothermal",
+      str_detect(Description, regex("Biomass|Wood|Waste", ignore_case = TRUE)) ~ "Biomass / Waste",
+      str_detect(Description, regex("Other", ignore_case = TRUE)) ~ "Other",
+      str_detect(Description, regex("Total", ignore_case = TRUE)) ~ "Total",
+      TRUE ~ "Other"
+    ),
+    
+    # Put fuel types into broader groups for later summaries
+    broad_group = case_when(
+      fuel %in% c("Hydroelectric", "Wind", "Solar", "Geothermal", "Biomass / Waste", "Nuclear") ~ "Renewable / Low-carbon",
+      fuel %in% c("Coal", "Natural Gas", "Petroleum") ~ "Fossil Fuels",
+      fuel == "Total" ~ "Total",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  arrange(year, sector, fuel)
+
+# This is the main dataset used for most plots in the app
+energy_plot <- energy_clean %>%
+  filter(
+    sector == "All Sectors",
+    fuel != "Total"
+  ) %>%
+  mutate(
+    # Keep fuel order consistent across plots
+    fuel = factor(
+      fuel,
+      levels = c(
+        "Coal", "Natural Gas", "Nuclear", "Hydroelectric",
+        "Wind", "Solar", "Petroleum", "Geothermal",
+        "Biomass / Waste", "Other"
+      )
+    )
+  )
+
+# Create yearly summary values used for the quick facts section
+summary_totals <- energy_clean %>%
+  filter(sector == "All Sectors") %>%
+  group_by(year) %>%
+  summarize(
+    total_generation = sum(generation_mkwh[fuel == "Total"], na.rm = TRUE),
+    renewable_generation = sum(generation_mkwh[broad_group == "Renewable / Low-carbon"], na.rm = TRUE),
+    renewable_share = renewable_generation / total_generation,
+    .groups = "drop"
+  )
+
+# These extra objects help the app controls and labels
+latest_year <- max(energy_plot$year, na.rm = TRUE)
+earliest_year <- min(energy_plot$year, na.rm = TRUE)
+all_fuels <- levels(droplevels(energy_plot$fuel))
+
+# Set one consistent color for each fuel
+fuel_colors <- c(
+  "Coal" = "#7A7A7A",
+  "Natural Gas" = "#F4A340",
+  "Nuclear" = "#D864C5",
+  "Hydroelectric" = "#4DA3D9",
+  "Wind" = "#42B863",
+  "Solar" = "#D8C64A",
+  "Petroleum" = "#E45E4D",
+  "Geothermal" = "#8A6FD1",
+  "Biomass / Waste" = "#8C6B3E",
+  "Other" = "#D9CFBF"
+)
+
+# Save all prepared objects into one RData file
+save(
+  energy_clean,
+  energy_plot,
+  summary_totals,
+  latest_year,
+  earliest_year,
+  all_fuels,
+  fuel_colors,
+  file = "energy_app_data.RData"
+)
+
+cat("energy_app_data.RData has been created successfully.\n")
